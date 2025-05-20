@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>HH Applicant Analyzer</title>
+  <style>
+    body { font-family: Arial; margin: 40px; display: flex; gap: 40px; }
+    #left, #right { flex: 1; }
+    textarea { width: 100%; height: 200px; }
+    #requirements, #analysis { margin-top: 20px; white-space: pre-wrap; }
+    select, input, button { margin: 5px 0; }
+    .spinner { display: none; font-style: italic; color: #666; }
+    .spinner.active { display: block; }
+    .error { color: red; }
+  </style>
+</head>
+<body>
+  <div id="left">
+    <h3>Job Description</h3>
+    <textarea id="jobText" placeholder="Paste job description here..."></textarea>
+    <br><button onclick="saveText()">Save</button>
+    <div id="requirements"><div class="spinner">Loading requirements...</div></div>
+  </div>
+
+  <div id="right">
+    <h3>Candidate</h3>
+    <form id="analyzeForm">
+      <label>Select Vacancy:</label>
+      <select name="vacancy_id" id="vacancySelect">
+        <option value="">-- Select Vacancy --</option>
+      </select><br><br>
+      <label>Select HH Applicant:</label>
+      <select name="applicant_id" id="applicantSelect" disabled>
+        <option value="">-- Select Applicant --</option>
+      </select><br><br>
+      <label>Or select PDF Resume:</label>
+      <input type="file" name="file" accept=".pdf"><br><br>
+      <button type="submit">Analyze</button>
+    </form>
+    <div id="analysis"><div class="spinner">Waiting for analysis...</div></div>
+  </div>
+
+  <script>
+    async function saveText() {
+      const text = document.getElementById('jobText').value;
+      const requirementsDiv = document.getElementById('requirements');
+      requirementsDiv.innerHTML = '<div class="spinner active">Loading requirements...</div>';
+      try {
+        const response = await fetch('/api/requirements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        });
+        const data = await response.json();
+        if (data.error) {
+          requirementsDiv.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+          return;
+        }
+        requirementsDiv.innerHTML = 
+          'Обязательные требования:\n' + (data.requirements.must_have.join('\n') || 'Отсутствуют') + 
+          '\n\nЖелательные требования:\n' + (data.requirements.nice_to_have.join('\n') || 'Отсутствуют');
+      } catch (error) {
+        console.error('Ошибка при сохранении текста:', error);
+        requirementsDiv.innerHTML = '<div class="error">Не удалось загрузить требования. Пожалуйста, попробуйте снова.</div>';
+      }
+    }
+
+    async function loadVacancies() {
+      const select = document.getElementById('vacancySelect');
+      select.innerHTML = '<option value="">Loading vacancies...</option>';
+      try {
+        const res = await fetch('/api/hh_vacancies');
+        if (res.status === 401) {
+          alert('Please authorize to access vacancies.');
+          window.location.href = '/login';
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(`Failed to fetch vacancies: ${res.statusText}`);
+        }
+        const data = await res.json();
+        select.innerHTML = '<option value="">-- Select Vacancy --</option>';
+        if (data.vacancies) {
+          data.vacancies.forEach(vac => {
+            const opt = document.createElement('option');
+            opt.value = vac.id;
+            opt.textContent = vac.name;
+            select.appendChild(opt);
+          });
+        } else if (data.error) {
+          select.innerHTML = '<option value="">-- Select Vacancy --</option>';
+          alert(`Error: ${data.error}`);
+        }
+      } catch (error) {
+        console.error('Error loading vacancies:', error);
+        select.innerHTML = '<option value="">-- Select Vacancy --</option>';
+        alert('Failed to load vacancies. Please try again.');
+      }
+    }
+
+    async function loadApplicants(vacancyId) {
+      const select = document.getElementById('applicantSelect');
+      select.innerHTML = '<option value="">-- Select Applicant --</option>';
+      if (!vacancyId) {
+        select.disabled = true;
+        return;
+      }
+      select.disabled = false;
+      select.innerHTML = '<option value="">Loading applicants...</option>';
+      try {
+        const res = await fetch(`/api/hh_applicants?vacancy_id=${vacancyId}`);
+        console.log('Статус ответа /api/hh_applicants:', res.status);
+        const clone = res.clone();
+        clone.text().then(txt => console.log('Ответ /api/hh_applicants:', txt));
+        if (res.status === 401) {
+          alert('Сессия истекла. Пожалуйста, авторизуйтесь снова.');
+          window.location.href = '/login';
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(`Не удалось загрузить отклики: ${res.status} ${res.statusText}`);
+        }
+        const data = await res.json();
+        console.log('Данные откликов:', data);
+        select.innerHTML = '<option value="">-- Select Applicant --</option>';
+        if (data.applicants) {
+          data.applicants.forEach(app => {
+            const opt = document.createElement('option');
+            opt.value = app.resume_id;
+            opt.textContent = (app.first_name + " " + app.last_name) || 'Unnamed Applicant';
+            select.appendChild(opt);
+          });
+        } else if (data.error) {
+          alert(`Ошибка: ${data.error}`);
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки откликов:', error);
+        select.innerHTML = '<option value="">-- Select Applicant --</option>';
+        alert('Не удалось загрузить отклики. Пожалуйста, попробуйте снова.');
+      }
+    }
+
+    async function loadVacancyDescription(vacancyId) {
+      const textarea = document.getElementById('jobText');
+      const requirementsDiv = document.getElementById('requirements');
+      if (!vacancyId) {
+        textarea.value = '';
+        requirementsDiv.innerHTML = '<div class="spinner">Loading requirements...</div>';
+        return;
+      }
+      textarea.value = 'Загрузка описания вакансии...';
+      try {
+        const res = await fetch(`/api/vacancy_description?vacancy_id=${vacancyId}`);
+        if (res.status === 401) {
+          alert('Сессия истекла. Пожалуйста, авторизуйтесь снова.');
+          window.location.href = '/login';
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(`Не удалось загрузить описание вакансии: ${res.statusText}`);
+        }
+        const data = await res.json();
+        if (data.description) {
+          textarea.value = data.description;
+          saveText(); // Автоматически обновляем требования
+        } else if (data.error) {
+          textarea.value = '';
+          requirementsDiv.innerHTML = `<div class="error">Ошибка: ${data.error}</div>`;
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки описания вакансии:', error);
+        textarea.value = '';
+        requirementsDiv.innerHTML = '<div class="error">Не удалось загрузить описание вакансии. Пожалуйста, попробуйте снова.</div>';
+      }
+    }
+
+    document.getElementById('vacancySelect').addEventListener('change', async (e) => {
+      const vacancyId = e.target.value;
+      await Promise.all([
+        loadApplicants(vacancyId),
+        loadVacancyDescription(vacancyId)
+      ]);
+    });
+
+    document.getElementById('analyzeForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const analysisDiv = document.getElementById('analysis');
+      analysisDiv.innerHTML = '<div class="spinner active">Analyzing...</div>';
+      try {
+        const formData = new FormData(e.target);
+        const res = await fetch('/api/analyze', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        analysisDiv.innerHTML = data.analysis || `<div class="error">${data.error}</div>`;
+      } catch (error) {
+        console.error('Error analyzing:', error);
+        analysisDiv.innerHTML = '<div class="error">Failed to analyze. Please try again.</div>';
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', loadVacancies);
+  </script>
+</body>
+</html>
